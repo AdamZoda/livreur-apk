@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Veetaa Livreur</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        // Suppression de l'erreur intempestive des extensions (React DevTools / Google Translate etc)
+        window.addEventListener('error', function (event) {
+            if (event.message && (
+                event.message.includes("Could not establish connection") ||
+                event.message.includes("Receiving end does not exist")
+            )) {
+                event.stopImmediatePropagation();
+            }
+        }, true);
+
+        const originalConsoleError = console.error;
+        console.error = function (...args) {
+            if (args[0] && typeof args[0] === 'string' && (
+                args[0].includes("Could not establish connection") ||
+                args[0].includes("Receiving end does not exist")
+            )) return;
+            originalConsoleError.apply(console, args);
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            overscroll-behavior-y: contain;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .glass-dark {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+    </style>
+</head>
+
+<body class="bg-[#0F172A] text-white">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+
+</html>

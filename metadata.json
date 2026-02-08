@@ -1,0 +1,8 @@
+{
+  "name": "Veetaa Livreur",
+  "description": "High-tech driver application for the Veetaa delivery platform with real-time tracking, mission management, and performance analytics.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
