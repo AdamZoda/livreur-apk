@@ -1,11 +1,11 @@
 
 export enum OrderStatus {
-  ASSIGNED = 'ASSIGNED',
-  AT_STORE = 'AT_STORE',
-  PICKED_UP = 'PICKED_UP',
-  DELIVERING = 'DELIVERING',
-  COMPLETED = 'COMPLETED',
-  CANCELLED = 'CANCELLED'
+  ASSIGNED = 'assigned',
+  AT_STORE = 'accepted',
+  PICKED_UP = 'picked_up',
+  DELIVERING = 'delivering',
+  COMPLETED = 'delivered',
+  CANCELLED = 'cancelled'
 }
 
 export interface Order {

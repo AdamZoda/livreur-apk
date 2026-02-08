@@ -22,7 +22,11 @@ const Missions: React.FC = () => {
 
         const fetchMissions = async () => {
             setLoading(true);
-            const { data } = await supabase.from('orders').select('*');
+            // Filtrer par is_archived en amont
+            const { data } = await supabase
+                .from('orders')
+                .select('*')
+                .eq('is_archived', false);
 
             if (data) {
                 const myMissions = data.filter(o => {
@@ -34,10 +38,11 @@ const Missions: React.FC = () => {
                     const isMine = assignedId === targetName || assignedId === targetId || assignedId === targetPhone;
                     const status = String(o.status || "").toLowerCase();
                     // On cache tout ce qui est terminé, annulé ou refusé
+                    // AJOUT : 'refuse', 'indisponibe' (variantes possibles)
                     const terminalStatuses = [
                         'delivered', 'completed', 'livrée', 'terminée',
-                        'refused', 'refusée', 'refusé', 'refus', 'rejected',
-                        'indisponible', 'indispo', 'cancelled', 'annulée', 'annulé', 'fermé'
+                        'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
+                        'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé'
                     ];
                     return isMine && !terminalStatuses.includes(status);
                 });
@@ -54,8 +59,8 @@ const Missions: React.FC = () => {
 
     const getStatusLabel = (status: string) => {
         const s = String(status).toLowerCase();
-        if (s === 'at_store' || s === 'traitement') return 'TRAITEMENT';
-        if (s === 'delivering' || s === 'progression') return 'PROGRESSION';
+        if (s === 'at_store' || s === 'traitement' || s === 'accepted') return 'TRAITEMENT';
+        if (s === 'delivering' || s === 'progression' || s === 'picked_up') return 'PROGRESSION';
         return s.toUpperCase();
     };
 

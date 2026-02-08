@@ -34,10 +34,11 @@ const Dashboard: React.FC = () => {
       }
 
       setLoading(true);
-      // On récupère TOUTES les commandes pour filtrer manuellement (plus fiable)
+      // On ne prend que les commandes non archivées pour les stats actives
       const { data: allOrders, error } = await supabase
         .from('orders')
         .select('*')
+        .eq('is_archived', false)
         .order('created_at', { ascending: false });
 
       if (allOrders) {
@@ -50,9 +51,11 @@ const Dashboard: React.FC = () => {
         });
 
         // 2. Séparer les commandes terminées (Historique)
+        // AJOUT : On ne montre que les succès, et on cache les 'refusé', 'annulé' ou 'indisponible'
         const finishedOrders = myOrders.filter(o => {
           const s = String(o.status || "").toLowerCase();
-          return ['delivered', 'completed', 'cancelled', 'refused', 'refusée', 'fermé', 'fermeture', 'indisponible', 'livrée', 'terminée'].includes(s);
+          const isSuccess = ['delivered', 'completed', 'livrée', 'terminée'].includes(s);
+          return isSuccess; // On ne garde que les succès pour le livreur
         });
 
         // 3. Calculer les statistiques

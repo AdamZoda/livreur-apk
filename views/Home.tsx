@@ -62,7 +62,11 @@ const Home: React.FC = () => {
     }
 
     const fetchAllMissions = async () => {
-      const { data } = await supabase.from('orders').select('*');
+      // On ne récupère que les missions qui ne sont PAS archivées
+      const { data } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('is_archived', false);
 
       if (data) {
         const myMissions = data.filter(o => {
@@ -75,8 +79,8 @@ const Home: React.FC = () => {
           const status = String(o.status || "").toLowerCase();
           const terminalStatuses = [
             'delivered', 'completed', 'livrée', 'terminée',
-            'refused', 'refusée', 'refusé', 'refus', 'rejected',
-            'indisponible', 'indispo', 'cancelled', 'annulée', 'annulé', 'fermé'
+            'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
+            'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé'
           ];
           const isTerminal = terminalStatuses.includes(status);
 
@@ -92,31 +96,43 @@ const Home: React.FC = () => {
     fetchAllMissions();
 
     // ABONNEMENT TEMPS RÉEL : Radar ultra-réactif
+    // Utilisation d'un ID de canal unique pour éviter les conflits
+    const channelId = `radar-${driverInfo.id}-${Date.now()}`;
     const channel = supabase
-      .channel('radar-sync-realtime')
+      .channel(channelId)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'orders'
+        },
         (payload) => {
-          console.log("Radar Update detected:", payload);
-          // On recharge tout pour être sûr de respecter les filtres complexes (terminalStatuses, assigned_driver_id, etc.)
-          fetchAllMissions();
+          console.log("Radar Realtime Update:", payload);
+          fetchAllMissions(); // Refresh immédiat
         }
       )
-      .subscribe((status) => {
-        console.log("Radar Subscription status:", status);
+      .subscribe((status, err) => {
+        if (err) console.error("Realtime Subscription Error:", err);
+        console.log("Radar Subscription Status:", status);
       });
 
     return () => {
+      console.log("Cleaning up Radar subscription...");
       supabase.removeChannel(channel);
     };
-  }, [isOnline, driverInfo]);
+  }, [isOnline, driverInfo?.id]); // On surveille l'id pour la stabilité
 
   const handleAcceptMission = async (orderId: string) => {
     setErrorStatus(null);
-    const { error } = await supabase.from('orders').update({ status: 'at_store' }).eq('id', orderId);
+    const { error } = await supabase
+      .from('orders')
+      .update({ status: OrderStatus.AT_STORE })
+      .eq('id', orderId);
+
     if (error) {
-      setErrorStatus(`Erreur : La base de données a refusé le statut.`);
+      console.error("Erreur acceptation mission:", error);
+      setErrorStatus(`Erreur DB (${error.code}) : ${error.message}`);
       return;
     }
     setIncomingMission(null);
@@ -125,8 +141,8 @@ const Home: React.FC = () => {
 
   const getStatusLabel = (status: string) => {
     const s = String(status).toLowerCase();
-    if (s === 'at_store') return 'TRAITEMENT';
-    if (s === 'delivering' || s === 'progression') return 'PROGRESSION';
+    if (s === 'at_store' || s === 'traitement' || s === 'accepted') return 'TRAITEMENT';
+    if (s === 'delivering' || s === 'progression' || s === 'picked_up') return 'PROGRESSION';
     return s.toUpperCase();
   };
 

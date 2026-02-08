@@ -50,8 +50,9 @@ const ActiveMission: React.FC = () => {
       if (data) {
         const s = String(data.status).toLowerCase();
         const terminalStatuses = [
-          'refused', 'refusée', 'refusé', 'refus', 'rejected',
-          'indisponible', 'indispo', 'cancelled', 'annulée', 'annulé', 'fermé'
+          'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
+          'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé',
+          'delivered', 'livrée', 'completed'
         ];
 
         // Si la commande est déjà annulée/refusée avant d'ouvrir, on dégage
@@ -84,19 +85,30 @@ const ActiveMission: React.FC = () => {
     fetchOrder();
 
     // ABONNEMENT TEMPS RÉEL : Si l'admin refuse la commande pendant que le livreur regarde
+    const channelId = `order-watch-${id}-${Date.now()}`;
     const channel = supabase
-      .channel(`order-lock-${id}`)
+      .channel(channelId)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'orders' },
+        { event: 'UPDATE', schema: 'public', table: 'orders', filter: `id=eq.${id}` },
         (payload) => {
-          if (String(payload.new.id) !== String(id)) return;
+          console.log("Active Mission Update:", payload);
           const newStatus = String(payload.new.status).toLowerCase();
+
+          // Mise à jour locale immédiate de l'ordre pour éviter le décalage
+          setOrder((prev: any) => ({ ...prev, ...payload.new }));
+
           const terminalStatuses = [
-            'refused', 'refusée', 'refusé', 'refus', 'rejected', 'indisponible', 'indispo', 'cancelled', 'annulée', 'annulé', 'fermé'
+            'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
+            'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé'
           ];
+          const successStatuses = ['delivered', 'livrée', 'completed'];
+
           if (terminalStatuses.includes(newStatus)) {
             setIsRejected(true);
+          } else if (successStatuses.includes(newStatus)) {
+            // Si c'est livré par l'admin, on quitte juste la page proprement
+            setTimeout(() => navigate('/mission'), 1500);
           }
         }
       )
@@ -123,17 +135,41 @@ const ActiveMission: React.FC = () => {
     const history = Array.isArray(order?.status_history) ? order.status_history : [];
     const newHistory = [...history, { status: nextLabelFR, time: now }];
 
-    const { error } = await supabase
+    // On prépare l'objet de mise à jour
+    // Si status_history cause l'erreur 400, on pourra l'isoler
+    const updateData: any = {
+      status: nextStatusDB,
+      status_history: newHistory
+    };
+
+    const { data, error } = await supabase
       .from('orders')
-      .update({
-        status: nextStatusDB,
-        status_history: newHistory
-      })
-      .eq('id', order.id);
+      .update(updateData)
+      .eq('id', id)
+      .select();
 
     if (error) {
-      console.error("Erreur DB:", error);
-      setUpdateError(`Erreur Base de Données (${error.code}) : La valeur '${nextStatusDB}' est refusée.`);
+      console.error("Erreur DB détaillée:", error);
+      // Tentative de repli sans l'historique si c'est lui qui pose problème
+      if (error.code === '42703' || error.message.includes('status_history')) {
+        const { data: retryData, error: retryError } = await supabase
+          .from('orders')
+          .update({ status: nextStatusDB })
+          .eq('id', id)
+          .select();
+
+        if (!retryError && retryData) {
+          setOrder((prev: any) => ({ ...prev, status: nextStatusDB }));
+          setCurrentStep(currentStep + 1);
+          return true;
+        }
+      }
+      setUpdateError(`Erreur (${error.code}) : ${error.message}. Vérifiez que la valeur '${nextStatusDB}' est autorisée.`);
+      return false;
+    }
+
+    if (!data || data.length === 0) {
+      setUpdateError("Aucune modification effectuée. Commande peut-être déjà mise à jour.");
       return false;
     }
 
@@ -146,12 +182,19 @@ const ActiveMission: React.FC = () => {
     setUpdateError(null);
 
     if (currentStep === 1) {
-      // Étape 1 : Passer en progression (Pas de QR nécessaire ici sauf si demandé, mais le user a dit "chez le client")
-      await performStatusUpdate('delivering', 'PROGRESSION');
+      // Étape 1 : Passer en progression (Utilisation de l'Enum OrderStatus)
+      await performStatusUpdate(OrderStatus.DELIVERING, 'PROGRESSION');
     }
     else if (currentStep === 2) {
       // Étape 2 : Marquer comme livrée -> SCAN QR CODE OBLIGATOIRE
-      setIsScannerOpen(true);
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        stream.getTracks().forEach(track => track.stop()); // On arrête le stream juste après le test
+        setIsScannerOpen(true);
+      } catch (err) {
+        console.error("Erreur Caméra:", err);
+        setUpdateError("Accès caméra refusé. Vous devez autoriser la caméra pour valider la livraison.");
+      }
     }
     else {
       navigate('/');
@@ -175,7 +218,7 @@ const ActiveMission: React.FC = () => {
         if (cleanText === expectedMessage) {
           scanner.clear();
           setIsScannerOpen(false);
-          performStatusUpdate('delivered', 'LIVRÉE');
+          performStatusUpdate(OrderStatus.COMPLETED, 'LIVRÉE');
         } else {
           setUpdateError(`Code Invalide. Attendu: CONFIRM-ORDER-ID-${order.id}`);
           // On laisse le scanner ouvert pour réessayer
@@ -249,9 +292,19 @@ const ActiveMission: React.FC = () => {
 
       <div className="space-y-6">
         {updateError && (
-          <div className="glass bg-red-500/20 border border-red-500/30 p-4 rounded-2xl flex items-center gap-3">
-            <AlertCircle className="text-red-500 shrink-0" size={20} />
-            <p className="text-red-500 text-[10px] font-black uppercase leading-tight">{updateError}</p>
+          <div className="glass bg-red-500/20 border border-red-500/30 p-4 rounded-2xl flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="text-red-500 shrink-0" size={20} />
+              <p className="text-red-500 text-[10px] font-black uppercase leading-tight flex-1">{updateError}</p>
+            </div>
+            {updateError.includes("caméra") && (
+              <button
+                onClick={handleNextStep}
+                className="bg-red-500 text-white text-[9px] font-black py-2 px-4 rounded-xl uppercase tracking-widest active:scale-95 transition-all self-end"
+              >
+                Réessayer l'accès
+              </button>
+            )}
           </div>
         )}
 
@@ -353,9 +406,6 @@ const ActiveMission: React.FC = () => {
             <div id="reader" className="w-full max-w-sm rounded-[2rem] overflow-hidden border-2 border-orange-500/50 shadow-[0_0_50px_rgba(249,115,22,0.2)] bg-black"></div>
 
             <div className="mt-12 text-center space-y-4 px-10">
-              <div className="bg-orange-500/10 p-6 rounded-[2rem] border border-orange-500/20">
-                <p className="text-orange-500 text-[11px] font-black uppercase leading-relaxed tracking-tight">Le message QR doit être : <br /><span className="text-white font-mono break-all text-[9.5px]">CONFIRM-ORDER-ID-{order.id}</span></p>
-              </div>
               <p className="text-slate-600 text-[9px] font-black uppercase tracking-widest italic pt-4">Alignez le QR Code dans le cadre ci-dessus</p>
             </div>
           </div>
