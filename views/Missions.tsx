@@ -22,29 +22,24 @@ const Missions: React.FC = () => {
 
         const fetchMissions = async () => {
             setLoading(true);
-            // Filtrer par is_archived en amont
-            const { data } = await supabase
+
+            // OPTIMISATION : Filtrage serveur strict
+            const { data, error } = await supabase
                 .from('orders')
                 .select('*')
-                .eq('is_archived', false);
+                .eq('is_archived', false)
+                .or(`assigned_driver_id.eq.${driverInfo.id},assigned_driver_id.eq.${driverInfo.name},assigned_driver_id.eq.${driverInfo.phone},assigned_driver_id.ilike.${driverInfo.name}`);
 
             if (data) {
                 const myMissions = data.filter(o => {
-                    const assignedId = String(o.assigned_driver_id || "").toLowerCase();
-                    const targetName = driverInfo.name.toLowerCase();
-                    const targetId = driverInfo.id.toLowerCase();
-                    const targetPhone = driverInfo.phone.toLowerCase();
-
-                    const isMine = assignedId === targetName || assignedId === targetId || assignedId === targetPhone;
                     const status = String(o.status || "").toLowerCase();
                     // On cache tout ce qui est terminé, annulé ou refusé
-                    // AJOUT : 'refuse', 'indisponibe' (variantes possibles)
                     const terminalStatuses = [
                         'delivered', 'completed', 'livrée', 'terminée',
                         'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
                         'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé'
                     ];
-                    return isMine && !terminalStatuses.includes(status);
+                    return !terminalStatuses.includes(status);
                 });
 
                 setActiveMissions(myMissions);
@@ -53,7 +48,13 @@ const Missions: React.FC = () => {
         };
 
         fetchMissions();
-        const chan = supabase.channel('missions-sync').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchMissions).subscribe();
+        // Refresh plus intelligent
+        const chan = supabase.channel('missions-sync')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+                setTimeout(() => fetchMissions(), 500);
+            })
+            .subscribe();
+
         return () => { supabase.removeChannel(chan); };
     }, [driverInfo]);
 
@@ -80,19 +81,7 @@ const Missions: React.FC = () => {
                 <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.3em]">Tâches en cours d'exécution</p>
             </header>
 
-            {/* Gamification / Goals Brief */}
-            <div className="grid grid-cols-2 gap-4">
-                <div className="glass p-5 rounded-3xl border-white/5 bg-orange-500/5">
-                    <Zap size={18} className="text-orange-500 mb-2" />
-                    <p className="text-[9px] font-black text-slate-500 uppercase">Présence</p>
-                    <p className="text-lg font-black text-white">3.5 / 5h</p>
-                </div>
-                <div className="glass p-5 rounded-3xl border-white/5 bg-blue-500/5">
-                    <Package size={18} className="text-blue-500 mb-2" />
-                    <p className="text-[9px] font-black text-slate-500 uppercase">Volume</p>
-                    <p className="text-lg font-black text-white">12 / 20</p>
-                </div>
-            </div>
+
 
             <div className="space-y-4">
                 <div className="flex justify-between items-center px-2">

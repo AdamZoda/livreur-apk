@@ -30,6 +30,22 @@ const Profile: React.FC = () => {
         };
 
         fetchDriverData();
+
+        // AJOUT: Calcul dynamique du nombre de livraisons (Comme sur le Dashboard Admin)
+        const fetchDeliveryCount = async (driverData: any) => {
+            if (!driverData) return;
+
+            // On compte les commandes avec statut succès lié à ce livreur
+            const { count, error } = await supabase
+                .from('orders')
+                .select('*', { count: 'exact', head: true })
+                .or(`assigned_driver_id.eq.${driverData.id},assigned_driver_id.eq.${driverData.full_name},assigned_driver_id.eq.${driverData.phone},assigned_driver_id.ilike.${driverData.full_name}`)
+                .in('status', ['delivered', 'completed', 'livrée', 'terminée', 'livré']);
+
+            if (count !== null) {
+                setDriver((prev: any) => ({ ...prev, delivery_count: count }));
+            }
+        };
     }, [driverPhone]);
 
     const handleLogout = () => {

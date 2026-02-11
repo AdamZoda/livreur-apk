@@ -74,7 +74,7 @@ const ActiveMission: React.FC = () => {
           } catch (e) { setItems([]); }
         }
 
-        if (s === 'at_store' || s === 'traitement') setCurrentStep(1);
+        if (['at_store', 'traitement', 'assigned', 'pending', 'waiting'].includes(s)) setCurrentStep(1);
         else if (s === 'delivering' || s === 'progression' || s === 'picked_up') setCurrentStep(2);
         else if (s === 'delivered' || s === 'livrée' || s === 'completed') setCurrentStep(3);
         else setCurrentStep(1);
@@ -210,7 +210,7 @@ const ActiveMission: React.FC = () => {
         /* verbose= */ false
       );
 
-      scanner.render((decodedText) => {
+      scanner.render(async (decodedText) => {
         // Le code attendu doit être un message précis incluant l'ID
         const cleanText = decodedText.trim().toUpperCase();
         const expectedMessage = `CONFIRM-ORDER-ID-${order.id}`;
@@ -218,7 +218,21 @@ const ActiveMission: React.FC = () => {
         if (cleanText === expectedMessage) {
           scanner.clear();
           setIsScannerOpen(false);
-          performStatusUpdate(OrderStatus.COMPLETED, 'LIVRÉE');
+
+          // 1. Mettre à jour la commande
+          const success = await performStatusUpdate(OrderStatus.COMPLETED, 'LIVRÉE');
+
+          // 2. Si succès, incrémenter le compteur du livreur
+          if (success) {
+            const driverId = localStorage.getItem('vta_driver_id');
+            if (driverId) {
+              // On récupère d'abord le compteur actuel pour être sûr (ou on pourrait faire une fonction RPC)
+              const { data: dData } = await supabase.from('drivers').select('delivery_count').eq('id', driverId).single();
+              const newCount = (dData?.delivery_count || 0) + 1;
+
+              await supabase.from('drivers').update({ delivery_count: newCount }).eq('id', driverId);
+            }
+          }
         } else {
           setUpdateError(`Code Invalide. Attendu: CONFIRM-ORDER-ID-${order.id}`);
           // On laisse le scanner ouvert pour réessayer

@@ -1,10 +1,10 @@
 
 export enum OrderStatus {
   ASSIGNED = 'assigned',
-  AT_STORE = 'accepted',
+  AT_STORE = 'at_store', // Correction: DB attend 'at_store'
   PICKED_UP = 'picked_up',
   DELIVERING = 'delivering',
-  COMPLETED = 'delivered',
+  COMPLETED = 'delivered', // Correction: DB attend 'delivered'
   CANCELLED = 'cancelled'
 }
 

@@ -62,20 +62,23 @@ const Home: React.FC = () => {
     }
 
     const fetchAllMissions = async () => {
-      // On ne récupère que les missions qui ne sont PAS archivées
-      const { data } = await supabase
+      // OPTIMISATION : On ne récupère que les missions assignées au livreur (ID, Nom ou Téléphone)
+      // Cela évite de télécharger toute la base de données inutilement
+      const { data, error } = await supabase
         .from('orders')
         .select('*')
-        .eq('is_archived', false);
+        .eq('is_archived', false)
+        .or(`assigned_driver_id.eq.${driverInfo.id},assigned_driver_id.eq.${driverInfo.name},assigned_driver_id.eq.${driverInfo.phone},assigned_driver_id.ilike.${driverInfo.name}`);
+
+      if (error) {
+        console.error("Erreur récupération missions:", error);
+        return;
+      }
 
       if (data) {
+        // Le filtrage côté serveur a déjà fait le gros du travail
+        // On garde quand même le filtre de statut pour exclure les terminés/annulés de l'affichage "Actif"
         const myMissions = data.filter(o => {
-          const assignedId = String(o.assigned_driver_id || "").toLowerCase();
-          const targetName = driverInfo.name.toLowerCase();
-          const targetId = driverInfo.id.toLowerCase();
-          const targetPhone = driverInfo.phone.toLowerCase();
-
-          const isMine = assignedId === targetName || assignedId === targetId || assignedId === targetPhone;
           const status = String(o.status || "").toLowerCase();
           const terminalStatuses = [
             'delivered', 'completed', 'livrée', 'terminée',
@@ -84,19 +87,16 @@ const Home: React.FC = () => {
           ];
           const isTerminal = terminalStatuses.includes(status);
 
-          return isMine && !isTerminal;
+          return !isTerminal;
         });
 
         setActiveMissions(myMissions);
-
-        // Plus besoin de setIncomingMission pour éviter le pop-up dérangeant
       }
     };
 
     fetchAllMissions();
 
-    // ABONNEMENT TEMPS RÉEL : Radar ultra-réactif
-    // Utilisation d'un ID de canal unique pour éviter les conflits
+    // ABONNEMENT TEMPS RÉEL OPTIMISÉ
     const channelId = `radar-${driverInfo.id}-${Date.now()}`;
     const channel = supabase
       .channel(channelId)
@@ -105,11 +105,14 @@ const Home: React.FC = () => {
         {
           event: '*',
           schema: 'public',
-          table: 'orders'
+          table: 'orders',
+          // On écoute tout changement sur la table orders, mais le fetchAllMissions filtrera
+          // Idéalement on filtrerait ici aussi, mais les filtres realtime sont limités
         },
         (payload) => {
           console.log("Radar Realtime Update:", payload);
-          fetchAllMissions(); // Refresh immédiat
+          // Petite latence pour laisser le temps à la DB de propager si besoin
+          setTimeout(() => fetchAllMissions(), 500);
         }
       )
       .subscribe((status, err) => {

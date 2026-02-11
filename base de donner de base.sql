@@ -18,7 +18,18 @@ CREATE TABLE public.categories (
   icon_name text,
   color_class text,
   display_order integer DEFAULT 0,
+  image_url text,
   CONSTRAINT categories_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.device_tokens (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  token text NOT NULL UNIQUE,
+  platform text NOT NULL CHECK (platform = ANY (ARRAY['ios'::text, 'android'::text, 'web'::text])),
+  created_at timestamp with time zone DEFAULT now(),
+  last_used_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT device_tokens_pkey PRIMARY KEY (id),
+  CONSTRAINT device_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
 CREATE TABLE public.drivers (
   id text NOT NULL,
@@ -34,6 +45,8 @@ CREATE TABLE public.drivers (
   last_lat double precision,
   last_lng double precision,
   documents jsonb DEFAULT '[]'::jsonb,
+  average_rating numeric DEFAULT 0,
+  total_ratings integer DEFAULT 0,
   CONSTRAINT drivers_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.favorites (
@@ -43,11 +56,36 @@ CREATE TABLE public.favorites (
   CONSTRAINT favorites_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id),
   CONSTRAINT favorites_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.stores(id)
 );
+CREATE TABLE public.notification_preferences (
+  user_id uuid NOT NULL,
+  order_updates boolean DEFAULT true,
+  delivery_alerts boolean DEFAULT true,
+  promotions boolean DEFAULT true,
+  new_products boolean DEFAULT false,
+  chat_messages boolean DEFAULT true,
+  email_notifications boolean DEFAULT false,
+  updated_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT notification_preferences_pkey PRIMARY KEY (user_id),
+  CONSTRAINT notification_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.notifications (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  user_id uuid,
+  type text NOT NULL CHECK (type = ANY (ARRAY['order_update'::text, 'delivery_alert'::text, 'promotion'::text, 'new_product'::text, 'chat_message'::text, 'system'::text])),
+  title text NOT NULL,
+  message text NOT NULL,
+  data jsonb,
+  read boolean DEFAULT false,
+  created_at timestamp with time zone DEFAULT now(),
+  expires_at timestamp with time zone,
+  CONSTRAINT notifications_pkey PRIMARY KEY (id),
+  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
 CREATE TABLE public.orders (
   id bigint NOT NULL DEFAULT nextval('orders_id_seq'::regclass),
   user_id uuid,
   store_id uuid,
-  status USER-DEFINED DEFAULT 'pending'::order_status,
+  status USER-DEFINED,
   total_products numeric NOT NULL,
   delivery_fee numeric DEFAULT 15.00,
   total_final numeric NOT NULL,
@@ -102,6 +140,13 @@ CREATE TABLE public.profiles (
   CONSTRAINT profiles_pkey PRIMARY KEY (id),
   CONSTRAINT profiles_id_fkey FOREIGN KEY (id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.ribs (
+  id integer NOT NULL DEFAULT nextval('ribs_id_seq'::regclass),
+  rib text NOT NULL,
+  label text NOT NULL,
+  full_name text,
+  CONSTRAINT ribs_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.settings (
   key text NOT NULL,
   value text,
@@ -123,9 +168,9 @@ CREATE TABLE public.stores (
   maps_url text,
   created_at timestamp with time zone DEFAULT now(),
   is_active boolean DEFAULT true,
-  is_deleted boolean DEFAULT false,
-  CONSTRAINT stores_pkey PRIMARY KEY (id),
-  CONSTRAINT stores_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.categories(id)
+  is_featured boolean DEFAULT false,
+  has_products boolean DEFAULT true,
+  CONSTRAINT stores_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.super_admins (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -133,4 +178,10 @@ CREATE TABLE public.super_admins (
   badge_id text NOT NULL,
   created_at timestamp with time zone DEFAULT now(),
   CONSTRAINT super_admins_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.support_info (
+  id integer NOT NULL DEFAULT nextval('support_info_id_seq'::regclass),
+  phone text NOT NULL,
+  email text NOT NULL,
+  CONSTRAINT support_info_pkey PRIMARY KEY (id)
 );

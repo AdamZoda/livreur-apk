@@ -34,41 +34,42 @@ const Dashboard: React.FC = () => {
       }
 
       setLoading(true);
-      // On ne prend que les commandes non archivées pour les stats actives
-      const { data: allOrders, error } = await supabase
+
+      // OPTIMISATION : On récupère TOUTES les commandes (actives + archivées) assignées au livreur
+      // pour avoir des stats justes (historique complet)
+      // On utilise le filtrage serveur pour ne pas charger toute la base
+      const { data: myOrders, error } = await supabase
         .from('orders')
         .select('*')
-        .eq('is_archived', false)
+        .or(`assigned_driver_id.eq.${driverId},assigned_driver_id.eq.${driverName},assigned_driver_id.eq.${driverPhone},assigned_driver_id.ilike.${driverName}`)
         .order('created_at', { ascending: false });
 
-      if (allOrders) {
-        // 1. Filtrer les commandes appartenant à ce livreur
-        const myOrders = allOrders.filter(o => {
-          const assignedTo = String(o.assigned_driver_id || "").toLowerCase().trim();
-          return assignedTo === driverId.toLowerCase() ||
-            assignedTo === driverPhone.toLowerCase() ||
-            assignedTo === driverName.toLowerCase();
-        });
+      if (myOrders) {
+        console.log("Dashboard Debug - Commandes brutes reçues:", myOrders.length, myOrders);
+        console.log("Dashboard Debug - IDs Livreur:", { driverId, driverName, driverPhone });
 
         // 2. Séparer les commandes terminées (Historique)
-        // AJOUT : On ne montre que les succès, et on cache les 'refusé', 'annulé' ou 'indisponible'
+        // Correction : élargissement des status acceptés pour inclure "livré", "Livré", etc.
         const finishedOrders = myOrders.filter(o => {
-          const s = String(o.status || "").toLowerCase();
-          const isSuccess = ['delivered', 'completed', 'livrée', 'terminée'].includes(s);
-          return isSuccess; // On ne garde que les succès pour le livreur
+          const s = String(o.status || "").toLowerCase().trim();
+          const isSuccess = [
+            'delivered', 'completed',
+            'livrée', 'terminée', 'livré', 'termine', 'success', 'done'
+          ].includes(s);
+
+          if (!isSuccess && s !== 'cancelled' && s !== 'refused') {
+            console.log("Dashboard Debug - Status ignoré:", s, "pour la commande", o.id);
+          }
+          return isSuccess;
         });
 
         // 3. Calculer les statistiques
-        const successfulOrders = finishedOrders.filter(o => {
-          const s = String(o.status).toLowerCase();
-          return s === 'delivered' || s === 'completed' || s === 'livrée' || s === 'terminée';
-        });
-
-        const total = successfulOrders.reduce((acc, curr) => acc + Number(curr.delivery_fee || 0), 0);
+        // Note: finishedOrders contient déjà uniquement les succès grâce au filtre ci-dessus
+        const total = finishedOrders.reduce((acc, curr) => acc + Number(curr.delivery_fee || 0), 0);
 
         setStats({
           totalEarnings: total,
-          count: successfulOrders.length
+          count: finishedOrders.length
         });
 
         setHistory(finishedOrders.slice(0, 15)); // Top 15 dernières courses
@@ -76,13 +77,20 @@ const Dashboard: React.FC = () => {
         // 4. Graphique
         const days = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
         const groupings: any = {};
-        successfulOrders.forEach(o => {
+
+        // On initialise à 0 pour tous les jours
+        days.forEach(d => groupings[d] = 0);
+
+        finishedOrders.forEach(o => {
+          // On vérifie si la commande est de cette semaine (optionnel, mais mieux pour "Revenus de la Semaine")
+          // Ici on prend tout pour simplifier comme demandé, ou on pourrait filtrer par date
           const d = new Date(o.created_at).getDay();
           const dayName = days[d];
           groupings[dayName] = (groupings[dayName] || 0) + Number(o.delivery_fee || 0);
         });
 
         const chartData = days.map(d => ({ name: d, amount: groupings[d] || 0 }));
+        // Décalage pour commencer par Lundi
         const mondayFirst = [...chartData.slice(1), chartData[0]];
         setDailyData(mondayFirst);
       }
