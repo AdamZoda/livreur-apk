@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Package, Clock, CheckCircle2, AlertCircle, ChevronRight, ClipboardList, Zap } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
+import { detectMultiStores } from '../services/multiStoreService';
 
 const Missions: React.FC = () => {
     const [activeMissions, setActiveMissions] = useState<any[]>([]);
@@ -42,7 +43,34 @@ const Missions: React.FC = () => {
                     return !terminalStatuses.includes(status);
                 });
 
-                setActiveMissions(myMissions);
+                // Enrichir chaque mission avec les données multi-magasins
+                const enrichedMissions = myMissions.map(mission => {
+                    let items = [];
+                    let multiStoreData = null;
+
+                    // Parser les items si disponibles
+                    if (mission.items) {
+                        try {
+                            items = typeof mission.items === 'string'
+                                ? JSON.parse(mission.items)
+                                : mission.items;
+
+                            if (Array.isArray(items) && items.length > 0) {
+                                multiStoreData = detectMultiStores(items);
+                            }
+                        } catch (e) {
+                            console.error('Erreur parsing items pour mission', mission.id, e);
+                        }
+                    }
+
+                    return {
+                        ...mission,
+                        items,
+                        multiStoreData
+                    };
+                });
+
+                setActiveMissions(enrichedMissions);
             }
             setLoading(false);
         };
@@ -106,9 +134,16 @@ const Missions: React.FC = () => {
                                         </div>
                                         <div>
                                             <h4 className="font-black text-white text-sm uppercase tracking-tight">Mission #{mission.id}</h4>
-                                            <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase tracking-tighter ${getStatusColor(mission.status)}`}>
-                                                {getStatusLabel(mission.status)}
-                                            </span>
+                                            <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                                                <span className={`text-[8px] px-2 py-0.5 rounded-full font-black uppercase tracking-tighter ${getStatusColor(mission.status)}`}>
+                                                    {getStatusLabel(mission.status)}
+                                                </span>
+                                                {mission.multiStoreData?.isMultiStore && (
+                                                    <span className="text-[8px] px-2 py-0.5 rounded-full font-black bg-blue-500/20 text-blue-400 uppercase tracking-tighter border border-blue-500/30">
+                                                        🏪 {mission.multiStoreData.storeCount} MAGASINS
+                                                    </span>
+                                                )}
+                                            </div>
                                         </div>
                                     </div>
                                     <div className="text-right">

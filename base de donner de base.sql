@@ -19,6 +19,7 @@ CREATE TABLE public.categories (
   color_class text,
   display_order integer DEFAULT 0,
   image_url text,
+  sub_categories ARRAY DEFAULT '{}'::text[],
   CONSTRAINT categories_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.device_tokens (
@@ -30,6 +31,22 @@ CREATE TABLE public.device_tokens (
   last_used_at timestamp with time zone DEFAULT now(),
   CONSTRAINT device_tokens_pkey PRIMARY KEY (id),
   CONSTRAINT device_tokens_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE TABLE public.driver_online_sessions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  driver_id text NOT NULL,
+  driver_phone text,
+  start_time timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  end_time timestamp with time zone,
+  CONSTRAINT driver_online_sessions_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.driver_sessions (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  driver_id text NOT NULL,
+  start_time timestamp with time zone DEFAULT now(),
+  end_time timestamp with time zone,
+  CONSTRAINT driver_sessions_pkey PRIMARY KEY (id),
+  CONSTRAINT driver_sessions_driver_id_fkey FOREIGN KEY (driver_id) REFERENCES public.drivers(id)
 );
 CREATE TABLE public.drivers (
   id text NOT NULL,
@@ -81,6 +98,21 @@ CREATE TABLE public.notifications (
   CONSTRAINT notifications_pkey PRIMARY KEY (id),
   CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.order_items (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  order_id bigint NOT NULL,
+  store_id uuid,
+  store_name text,
+  product_id uuid,
+  product_name text,
+  price numeric NOT NULL,
+  quantity integer DEFAULT 1,
+  note text,
+  image_base64 text,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT order_items_pkey PRIMARY KEY (id),
+  CONSTRAINT order_items_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id)
+);
 CREATE TABLE public.orders (
   id bigint NOT NULL DEFAULT nextval('orders_id_seq'::regclass),
   user_id uuid,
@@ -106,6 +138,7 @@ CREATE TABLE public.orders (
   status_history jsonb DEFAULT '[]'::jsonb,
   phone text,
   is_archived boolean DEFAULT false,
+  delivery_note text,
   CONSTRAINT orders_pkey PRIMARY KEY (id),
   CONSTRAINT orders_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id),
   CONSTRAINT orders_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.stores(id)
@@ -119,6 +152,7 @@ CREATE TABLE public.products (
   description text,
   is_available boolean DEFAULT true,
   created_at timestamp with time zone DEFAULT now(),
+  product_images ARRAY DEFAULT '{}'::text[],
   CONSTRAINT products_pkey PRIMARY KEY (id),
   CONSTRAINT products_store_id_fkey FOREIGN KEY (store_id) REFERENCES public.stores(id)
 );
@@ -170,7 +204,19 @@ CREATE TABLE public.stores (
   is_active boolean DEFAULT true,
   is_featured boolean DEFAULT false,
   has_products boolean DEFAULT true,
+  lat double precision,
+  lng double precision,
+  is_new boolean DEFAULT false,
+  sub_category text,
   CONSTRAINT stores_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.sub_categories (
+  id uuid NOT NULL DEFAULT uuid_generate_v4(),
+  name text NOT NULL,
+  category_id text NOT NULL,
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT sub_categories_pkey PRIMARY KEY (id),
+  CONSTRAINT sub_categories_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.categories(id)
 );
 CREATE TABLE public.super_admins (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -184,4 +230,25 @@ CREATE TABLE public.support_info (
   phone text NOT NULL,
   email text NOT NULL,
   CONSTRAINT support_info_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.support_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  ticket_id uuid,
+  sender_type text NOT NULL CHECK (sender_type = ANY (ARRAY['driver'::text, 'admin'::text])),
+  message text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT support_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT support_messages_ticket_id_fkey FOREIGN KEY (ticket_id) REFERENCES public.support_tickets(id)
+);
+CREATE TABLE public.support_tickets (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  driver_id text NOT NULL,
+  driver_name text,
+  driver_phone text,
+  description text NOT NULL,
+  status text DEFAULT 'open'::text,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  admin_reply text,
+  responded_at timestamp with time zone,
+  CONSTRAINT support_tickets_pkey PRIMARY KEY (id)
 );

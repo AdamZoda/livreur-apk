@@ -1,9 +1,12 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Zap, Bell, ShieldAlert, Navigation, Package, ChevronRight, MapPin, AlertCircle } from 'lucide-react';
+import { Geolocation } from '@capacitor/geolocation';
 import { Order, OrderStatus } from '../types';
 import { supabase } from '../services/supabaseClient';
+import { setDriverOffline } from '../services/driverService';
+import { detectMultiStores } from '../services/multiStoreService';
 
 const Home: React.FC = () => {
   const [isOnline, setIsOnline] = useState(() => localStorage.getItem('vta_online') === 'true');
@@ -13,6 +16,9 @@ const Home: React.FC = () => {
   const [errorStatus, setErrorStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const navigate = useNavigate();
+
+  // Refs for background tracking
+  const trackingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // 1. Charger les infos du livreur
   useEffect(() => {
@@ -35,25 +41,102 @@ const Home: React.FC = () => {
     loadDriver();
   }, []);
 
-  // 2. Persistance du statut En Ligne (LocalStorage + Supabase)
+  // 2. Gestion Silencieuse du Suivi (Localisation + Session)
+  useEffect(() => {
+    if (isOnline && driverInfo?.id) {
+      // Démarrer le suivi de localisation toutes les 10 secondes
+      const startTracking = async () => {
+        // Premier update immédiat
+        updateLocation();
+
+        trackingIntervalRef.current = setInterval(() => {
+          updateLocation();
+        }, 10000); // 10 secondes
+      };
+
+      startTracking();
+    } else {
+      // Arrêter le suivi si offline
+      if (trackingIntervalRef.current) {
+        clearInterval(trackingIntervalRef.current);
+        trackingIntervalRef.current = null;
+      }
+    }
+
+    return () => {
+      if (trackingIntervalRef.current) clearInterval(trackingIntervalRef.current);
+    };
+  }, [isOnline, driverInfo?.id]);
+
+  const updateLocation = async () => {
+    if (!driverInfo?.id) return;
+
+    try {
+      const position = await Geolocation.getCurrentPosition({
+        enableHighAccuracy: true,
+        timeout: 15000
+      });
+
+      if (position) {
+        await supabase
+          .from('drivers')
+          .update({
+            last_lat: position.coords.latitude,
+            last_lng: position.coords.longitude
+          })
+          .eq('id', driverInfo.id);
+
+        console.log("Tracking: Position mise à jour", position.coords.latitude, position.coords.longitude);
+      }
+    } catch (err) {
+      console.error("Tracking: Erreur récupération GPS", err);
+    }
+  };
+
+  // 3. Persistance du statut En Ligne (LocalStorage + Supabase)
   const toggleOnline = async (status: boolean) => {
     if (!driverInfo?.phone) return;
 
     setIsSyncing(true);
-    // On met à jour LocalStorage pour que ça reste même après un refresh
-    localStorage.setItem('vta_online', status ? 'true' : 'false');
-    setIsOnline(status);
 
-    // On met à jour la base de donnée pour que l'admin et le profil voient le changement
-    await supabase
-      .from('drivers')
-      .update({ status: status ? 'available' : 'offline' })
-      .eq('phone', driverInfo.phone);
+    try {
+      if (status) {
+        // GO ONLINE: Créer une session de connexion
+        const { data: sessionData } = await supabase
+          .from('driver_online_sessions')
+          .insert([{
+            driver_id: driverInfo.id,
+            driver_phone: driverInfo.phone,
+            start_time: new Date().toISOString()
+          }])
+          .select()
+          .single();
 
-    setIsSyncing(false);
+        if (sessionData) {
+          localStorage.setItem('vta_session_id', sessionData.id);
+        }
+
+        // Mise à jour du statut global
+        localStorage.setItem('vta_online', 'true');
+        setIsOnline(true);
+
+        await supabase
+          .from('drivers')
+          .update({ status: 'available' })
+          .eq('phone', driverInfo.phone);
+      } else {
+        // GO OFFLINE: Utiliser le service centralisé
+        await setDriverOffline();
+        setIsOnline(false);
+      }
+    } catch (err) {
+      console.error("Erreur toggle online:", err);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
-  // 3. Surveillance des commandes (Radar)
+  // 4. Surveillance des commandes (Radar)
   useEffect(() => {
     if (!isOnline || !driverInfo?.phone) {
       setActiveMissions([]);
@@ -62,8 +145,6 @@ const Home: React.FC = () => {
     }
 
     const fetchAllMissions = async () => {
-      // OPTIMISATION : On ne récupère que les missions assignées au livreur (ID, Nom ou Téléphone)
-      // Cela évite de télécharger toute la base de données inutilement
       const { data, error } = await supabase
         .from('orders')
         .select('*')
@@ -76,66 +157,116 @@ const Home: React.FC = () => {
       }
 
       if (data) {
-        // Le filtrage côté serveur a déjà fait le gros du travail
-        // On garde quand même le filtre de statut pour exclure les terminés/annulés de l'affichage "Actif"
         const myMissions = data.filter(o => {
           const status = String(o.status || "").toLowerCase();
+
+          // 1. Statuts terminaux (à ne jamais voir sur le Radar)
           const terminalStatuses = [
             'delivered', 'completed', 'livrée', 'terminée',
             'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
             'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé'
           ];
-          const isTerminal = terminalStatuses.includes(status);
+          if (terminalStatuses.includes(status)) return false;
 
-          return !isTerminal;
+          // 2. Statuts "En cours / Déjà acceptés ou commencés" 
+          // Selon le user : Si le livreur a déjà accepté (Traitement) ou commencé (Progression), 
+          // il ne doit pas les voir sur CETTE page (Radar).
+          // Ces missions seront visibles dans l'onglet "MISSIONS".
+          const inProgressStatuses = [
+            'delivering', 'progression', 'picked_up',
+            'treatment', 'at_store', 'accepted'
+          ];
+          if (inProgressStatuses.includes(status)) return false;
+
+          return true;
         });
 
-        setActiveMissions(myMissions);
+        // Enrichir chaque mission avec les données multi-magasins
+        const enrichedMissions = myMissions.map(mission => {
+          let items = [];
+          let multiStoreData = null;
+
+          // Parser les items si disponibles
+          if (mission.items) {
+            try {
+              items = typeof mission.items === 'string'
+                ? JSON.parse(mission.items)
+                : mission.items;
+
+              if (Array.isArray(items) && items.length > 0) {
+                multiStoreData = detectMultiStores(items);
+              }
+            } catch (e) {
+              console.error('Erreur parsing items pour mission', mission.id, e);
+            }
+          }
+
+          return {
+            ...mission,
+            items,
+            multiStoreData
+          };
+        });
+
+        setActiveMissions(enrichedMissions);
       }
     };
 
     fetchAllMissions();
 
-    // ABONNEMENT TEMPS RÉEL OPTIMISÉ
     const channelId = `radar-${driverInfo.id}-${Date.now()}`;
     const channel = supabase
       .channel(channelId)
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'orders',
-          // On écoute tout changement sur la table orders, mais le fetchAllMissions filtrera
-          // Idéalement on filtrerait ici aussi, mais les filtres realtime sont limités
-        },
+        { event: '*', schema: 'public', table: 'orders' },
         (payload) => {
-          console.log("Radar Realtime Update:", payload);
-          // Petite latence pour laisser le temps à la DB de propager si besoin
           setTimeout(() => fetchAllMissions(), 500);
         }
       )
-      .subscribe((status, err) => {
-        if (err) console.error("Realtime Subscription Error:", err);
-        console.log("Radar Subscription Status:", status);
-      });
+      .subscribe();
 
     return () => {
-      console.log("Cleaning up Radar subscription...");
       supabase.removeChannel(channel);
     };
-  }, [isOnline, driverInfo?.id]); // On surveille l'id pour la stabilité
+  }, [isOnline, driverInfo?.id]);
 
   const handleAcceptMission = async (orderId: string) => {
     setErrorStatus(null);
+
+    // 1. D'abord vérifier le statut réel de la commande
+    const { data: currentOrder } = await supabase
+      .from('orders')
+      .select('status')
+      .eq('id', orderId)
+      .maybeSingle();
+
+    if (currentOrder) {
+      const s = String(currentOrder.status).toLowerCase();
+      if (s === 'verification' || s === 'vérification') {
+        setErrorStatus("ACCÈS REFUSÉ : La commande est encore en cours de vérification par l'administration.");
+        return;
+      }
+    }
+
+    // 2. Tenter l'acceptation (Mise à jour vers 'treatment')
+    const now = new Date().toISOString();
     const { error } = await supabase
       .from('orders')
-      .update({ status: OrderStatus.AT_STORE })
+      .update({
+        status: 'treatment',
+        status_history: [{ status: 'Acceptée par Livreur', time: now }]
+      })
       .eq('id', orderId);
 
     if (error) {
       console.error("Erreur acceptation mission:", error);
-      setErrorStatus(`Erreur DB (${error.code}) : ${error.message}`);
+      // Message plus clair pour l'utilisateur
+      if (error.message.includes('order_status')) {
+        setErrorStatus(`Erreur : Le statut 'treatment' n'est pas autorisé par la base.`);
+      } else {
+        setErrorStatus(`Erreur DB (${error.code}) : ${error.message}`);
+      }
       return;
     }
     setIncomingMission(null);
@@ -144,7 +275,7 @@ const Home: React.FC = () => {
 
   const getStatusLabel = (status: string) => {
     const s = String(status).toLowerCase();
-    if (s === 'at_store' || s === 'traitement' || s === 'accepted') return 'TRAITEMENT';
+    if (s === 'at_store' || s === 'traitement' || s === 'accepted' || s === 'assigned') return 'TRAITEMENT';
     if (s === 'delivering' || s === 'progression' || s === 'picked_up') return 'PROGRESSION';
     return s.toUpperCase();
   };
@@ -192,6 +323,16 @@ const Home: React.FC = () => {
           </div>
 
           <div className="w-full space-y-4">
+            {errorStatus && (
+              <div className="glass bg-red-500/10 border border-red-500/20 p-4 rounded-2xl flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                <ShieldAlert className="text-red-500 shrink-0 mt-0.5" size={18} />
+                <div className="flex-1">
+                  <p className="text-red-500 text-[10px] font-black uppercase leading-tight">{errorStatus}</p>
+                  <button onClick={() => setErrorStatus(null)} className="text-[8px] text-white/50 underline mt-2 uppercase font-black">Fermer</button>
+                </div>
+              </div>
+            )}
+
             <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] px-2 flex justify-between items-center">
               <span>Missions Actives</span>
               <span className="bg-white/5 px-2 py-0.5 rounded text-white font-serif">{activeMissions.length}</span>
@@ -215,9 +356,14 @@ const Home: React.FC = () => {
                     <div className="w-12 h-12 rounded-2xl bg-orange-500/10 text-orange-500 flex items-center justify-center"><Package size={22} /></div>
                     <div className="space-y-1">
                       <h4 className="font-black text-white text-[11px] uppercase tracking-tight">MISSION #{mission.id}</h4>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[7px] px-2 py-0.5 rounded-full font-black bg-white/5 text-slate-400 uppercase tracking-tighter">{getStatusLabel(mission.status)}</span>
                         <p className="text-slate-500 text-[9px] font-black uppercase truncate max-w-[100px]">{mission.store_name}</p>
+                        {mission.multiStoreData?.isMultiStore && (
+                          <span className="text-[7px] px-2 py-0.5 rounded-full font-black bg-blue-500/20 text-blue-400 uppercase tracking-tighter border border-blue-500/30">
+                            🏪 {mission.multiStoreData.storeCount} MAGASINS
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>

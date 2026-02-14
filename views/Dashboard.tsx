@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { TrendingUp, PackageCheck, Wallet, History, AlertCircle, XCircle, CheckCircle2 } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
+import { detectMultiStores } from '../services/multiStoreService';
 
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({ totalEarnings: 0, count: 0 });
@@ -45,11 +46,7 @@ const Dashboard: React.FC = () => {
         .order('created_at', { ascending: false });
 
       if (myOrders) {
-        console.log("Dashboard Debug - Commandes brutes reçues:", myOrders.length, myOrders);
-        console.log("Dashboard Debug - IDs Livreur:", { driverId, driverName, driverPhone });
-
         // 2. Séparer les commandes terminées (Historique)
-        // Correction : élargissement des status acceptés pour inclure "livré", "Livré", etc.
         const finishedOrders = myOrders.filter(o => {
           const s = String(o.status || "").toLowerCase().trim();
           const isSuccess = [
@@ -57,14 +54,10 @@ const Dashboard: React.FC = () => {
             'livrée', 'terminée', 'livré', 'termine', 'success', 'done'
           ].includes(s);
 
-          if (!isSuccess && s !== 'cancelled' && s !== 'refused') {
-            console.log("Dashboard Debug - Status ignoré:", s, "pour la commande", o.id);
-          }
           return isSuccess;
         });
 
         // 3. Calculer les statistiques
-        // Note: finishedOrders contient déjà uniquement les succès grâce au filtre ci-dessus
         const total = finishedOrders.reduce((acc, curr) => acc + Number(curr.delivery_fee || 0), 0);
 
         setStats({
@@ -72,25 +65,46 @@ const Dashboard: React.FC = () => {
           count: finishedOrders.length
         });
 
-        setHistory(finishedOrders.slice(0, 15)); // Top 15 dernières courses
+        // Enrichir l'historique avec les données multi-magasins
+        const enrichedHistory = finishedOrders.slice(0, 15).map(mission => {
+          let items = [];
+          let multiStoreData = null;
+
+          if (mission.items) {
+            try {
+              items = typeof mission.items === 'string'
+                ? JSON.parse(mission.items)
+                : mission.items;
+
+              if (Array.isArray(items) && items.length > 0) {
+                multiStoreData = detectMultiStores(items);
+              }
+            } catch (e) {
+              console.error('Erreur parsing items pour historique', mission.id, e);
+            }
+          }
+
+          return {
+            ...mission,
+            items,
+            multiStoreData
+          };
+        });
+
+        setHistory(enrichedHistory); // Top 15 dernières courses enrichies
 
         // 4. Graphique
         const days = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
         const groupings: any = {};
-
-        // On initialise à 0 pour tous les jours
         days.forEach(d => groupings[d] = 0);
 
         finishedOrders.forEach(o => {
-          // On vérifie si la commande est de cette semaine (optionnel, mais mieux pour "Revenus de la Semaine")
-          // Ici on prend tout pour simplifier comme demandé, ou on pourrait filtrer par date
           const d = new Date(o.created_at).getDay();
           const dayName = days[d];
           groupings[dayName] = (groupings[dayName] || 0) + Number(o.delivery_fee || 0);
         });
 
         const chartData = days.map(d => ({ name: d, amount: groupings[d] || 0 }));
-        // Décalage pour commencer par Lundi
         const mondayFirst = [...chartData.slice(1), chartData[0]];
         setDailyData(mondayFirst);
       }
@@ -182,9 +196,16 @@ const Dashboard: React.FC = () => {
                   </div>
                   <div>
                     <h4 className="font-black text-white text-sm uppercase max-w-[120px] truncate">{order.store_name || "Mission"}</h4>
-                    <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest mt-0.5">
-                      #{order.id} • {new Date(order.created_at).toLocaleDateString()}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap mt-0.5">
+                      <p className="text-[9px] text-slate-500 font-black uppercase tracking-widest">
+                        #{order.id} • {new Date(order.created_at).toLocaleDateString()}
+                      </p>
+                      {order.multiStoreData?.isMultiStore && (
+                        <span className="text-[7px] px-2 py-0.5 rounded-full font-black bg-blue-500/20 text-blue-400 uppercase tracking-tighter border border-blue-500/30">
+                          🏪 {order.multiStoreData.storeCount} MAGASINS
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="text-right">

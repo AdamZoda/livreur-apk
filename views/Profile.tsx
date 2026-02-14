@@ -1,8 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, User, Phone, CreditCard, Shield, Package, Trash2, Zap } from 'lucide-react';
+import { LogOut, User, Phone, CreditCard, Shield, Package, Trash2, Zap, LifeBuoy, ChevronRight } from 'lucide-react';
 import { supabase } from '../services/supabaseClient';
+
+import { setDriverOffline } from '../services/driverService';
 
 const Profile: React.FC = () => {
     const navigate = useNavigate();
@@ -48,7 +50,8 @@ const Profile: React.FC = () => {
         };
     }, [driverPhone]);
 
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        await setDriverOffline();
         localStorage.clear();
         navigate('/login');
     };
@@ -128,15 +131,7 @@ const Profile: React.FC = () => {
                     </div>
                 </div>
 
-                <div className="glass p-5 rounded-3xl border-white/10 flex items-center gap-4">
-                    <div className="w-12 h-12 bg-green-500/10 rounded-2xl flex items-center justify-center text-green-500">
-                        <Package size={24} />
-                    </div>
-                    <div>
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total Livraisons</p>
-                        <p className="font-bold text-white">{driver.delivery_count} Missions</p>
-                    </div>
-                </div>
+
 
                 <div className={`glass p-5 rounded-3xl border-white/10 flex items-center gap-4 ${driver.warns > 0 ? 'bg-red-500/5' : ''}`}>
                     <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${driver.warns > 0 ? 'bg-red-500/10 text-red-500' : 'bg-slate-500/10 text-slate-500'}`}>
@@ -146,6 +141,22 @@ const Profile: React.FC = () => {
                         <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Avertissements (Warns)</p>
                         <p className={`font-bold ${driver.warns > 0 ? 'text-red-500' : 'text-white'}`}>{driver.warns} Signalement{driver.warns > 1 ? 's' : ''}</p>
                     </div>
+                </div>
+
+                <div
+                    onClick={() => navigate('/support')}
+                    className="glass p-5 rounded-3xl border-white/10 flex items-center justify-between active:scale-95 transition-all cursor-pointer hover:bg-white/[0.02]"
+                >
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-orange-500/10 rounded-2xl flex items-center justify-center text-orange-500">
+                            <LifeBuoy size={24} />
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Besoin d'aide ?</p>
+                            <p className="font-bold text-white uppercase text-xs">Service Support</p>
+                        </div>
+                    </div>
+                    <ChevronRight size={20} className="text-slate-600" />
                 </div>
             </div>
 
