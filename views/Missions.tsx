@@ -124,7 +124,11 @@ const Missions: React.FC = () => {
                         {activeMissions.map((mission) => (
                             <div
                                 key={mission.id}
-                                onClick={() => navigate(`/mission/${mission.id}`)}
+                                onClick={() => {
+                                    const s = String(mission.status).toLowerCase();
+                                    if (s === 'verification' || s === 'vérification') return;
+                                    navigate(`/mission/${mission.id}`);
+                                }}
                                 className="glass p-6 rounded-[2.5rem] border-white/5 active:scale-[0.97] transition-all cursor-pointer hover:bg-white/[0.02]"
                             >
                                 <div className="flex justify-between items-start mb-4">

@@ -64,6 +64,7 @@ CREATE TABLE public.drivers (
   documents jsonb DEFAULT '[]'::jsonb,
   average_rating numeric DEFAULT 0,
   total_ratings integer DEFAULT 0,
+  fcm_token text,
   CONSTRAINT drivers_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.favorites (
@@ -208,6 +209,8 @@ CREATE TABLE public.stores (
   lng double precision,
   is_new boolean DEFAULT false,
   sub_category text,
+  latitude numeric CHECK (latitude IS NULL OR latitude >= '-90'::integer::numeric AND latitude <= 90::numeric),
+  longitude numeric CHECK (longitude IS NULL OR longitude >= '-180'::integer::numeric AND longitude <= 180::numeric),
   CONSTRAINT stores_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.sub_categories (

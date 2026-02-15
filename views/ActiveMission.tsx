@@ -19,13 +19,15 @@ import {
   X,
   Map,
   RotateCcw,
-  AlertTriangle
+  AlertTriangle,
+  Camera
 } from 'lucide-react';
 import { Order, OrderStatus } from '../types';
 import { supabase } from '../services/supabaseClient';
 import * as CapGeo from '@capacitor/geolocation';
 import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 import { analyzeOrder, generateMultiStoreRoute } from '../services/multiStoreService';
+import { compressImage } from '../utils/imageUtils';
 
 const ActiveMission: React.FC = () => {
   const { id } = useParams();
@@ -40,7 +42,31 @@ const ActiveMission: React.FC = () => {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isRejected, setIsRejected] = useState(false);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [invoiceImage, setInvoiceImage] = useState<string | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
+
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      const file = event.target.files[0];
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const base64String = reader.result as string;
+        try {
+          // Compression immédiate pour éviter de stocker un gros string en mémoire
+          // On réduit à max 1024px et 70% qualité (suffisant pour une facture)
+          const compressed = await compressImage(base64String, 1024, 0.7);
+          setInvoiceImage(compressed);
+        } catch (err) {
+          console.error("Erreur compression:", err);
+          // Fallback sur l'original si la compression échoue
+          setInvoiceImage(base64String);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const toggleFacingMode = async () => {
     if (scannerRef.current && scannerRef.current.isScanning) {
@@ -125,10 +151,20 @@ const ActiveMission: React.FC = () => {
 
         setItems(parsedItems);
 
-        if (['at_store', 'traitement', 'assigned', 'pending', 'waiting'].includes(s)) setCurrentStep(1);
-        else if (s === 'delivering' || s === 'progression' || s === 'picked_up') setCurrentStep(2);
-        else if (s === 'delivered' || s === 'livrée' || s === 'completed') setCurrentStep(3);
-        else setCurrentStep(1);
+        if (['at_store', 'traitement', 'assigned', 'pending', 'waiting'].includes(s)) {
+          setCurrentStep(1);
+        } else if (s === 'delivering' || s === 'progression') {
+          // Si on est "En livraison", on distingue l'étape selon la présence de la facture
+          if (data.store_invoice_base64) {
+            setCurrentStep(3); // A déjà la facture -> Étape 3 (Progression / Scan)
+          } else {
+            setCurrentStep(2); // Pas de facture -> Étape 2 (En Course / Photo)
+          }
+        } else if (s === 'delivered' || s === 'livrée' || s === 'completed') {
+          setCurrentStep(4);
+        } else {
+          setCurrentStep(1);
+        }
       }
       setLoading(false);
     };
@@ -181,8 +217,9 @@ const ActiveMission: React.FC = () => {
   }, [isRejected, navigate]);
 
   // Action de passage à l'étape suivante (mise à jour DB)
-  const performStatusUpdate = async (nextStatusDB: string, label: string) => {
+  const performStatusUpdate = async (nextStatusDB: string, label: string, additionalUpdates: any = {}) => {
     if (!order) return false;
+    setIsUpdating(true);
 
     // Mise à jour de l'historique
     const newHistory = [...(order.status_history || []), {
@@ -194,7 +231,8 @@ const ActiveMission: React.FC = () => {
       .from('orders')
       .update({
         status: nextStatusDB,
-        status_history: newHistory
+        status_history: newHistory,
+        ...additionalUpdates
       })
       .eq('id', id)
       .select();
@@ -204,36 +242,74 @@ const ActiveMission: React.FC = () => {
       // Fallback au cas où le champ status_history ne supporte pas l'append direct
       const { data: retryData, error: retryError } = await supabase
         .from('orders')
-        .update({ status: nextStatusDB })
+        .update({ status: nextStatusDB, ...additionalUpdates })
         .eq('id', id)
         .select();
 
       if (!retryError && retryData) {
-        setOrder((prev: any) => ({ ...prev, status: nextStatusDB }));
+        setOrder((prev: any) => ({ ...prev, status: nextStatusDB, ...additionalUpdates }));
         setCurrentStep(currentStep + 1);
         return true;
       }
       setUpdateError(`Erreur (${error.code}) : ${error.message}.`);
+      setIsUpdating(false);
       return false;
     }
 
-    setOrder((prev: any) => ({ ...prev, status: nextStatusDB, status_history: newHistory }));
+    setOrder((prev: any) => ({ ...prev, status: nextStatusDB, status_history: newHistory, ...additionalUpdates }));
     setCurrentStep(currentStep + 1);
+    setIsUpdating(false);
     return true;
   };
 
   const handleNextStep = async () => {
     setUpdateError(null);
+    setIsUpdating(true);
 
+    // ÉTAPE 1 : TRAITEMENT -> EN COURSE (delivering sans photo)
     if (currentStep === 1) {
-      // Étape 1 : Passer en progression (Utilisation de l'Enum OrderStatus)
-      await performStatusUpdate(OrderStatus.DELIVERING, 'PROGRESSION');
+      // On passe en "DELIVERING" direct. Le Step 2 sera détecté car pas de photo.
+      await performStatusUpdate(OrderStatus.DELIVERING, 'EN COURSE');
     }
+    // ÉTAPE 2 : EN COURSE -> PROGRESSION (upload photo facture séparément)
     else if (currentStep === 2) {
-      // Étape 2 : SCAN QR CODE SANS BOUTONS INTERMÉDIAIRES
-      setIsScannerOpen(true);
+      if (!invoiceImage) {
+        setUpdateError("Preuve requise : Vous devez prendre une photo de la facture.");
+        setIsUpdating(false);
+        return;
+      }
+
+      // UPLOAD PHOTO SÉPARÉ - On fait un update dédié JUSTE pour la photo
+      console.log("📸 Upload facture en cours... Taille:", invoiceImage.length, "caractères");
+
+      const { data: photoData, error: photoError } = await supabase
+        .from('orders')
+        .update({ store_invoice_base64: invoiceImage })
+        .eq('id', id)
+        .select('id, store_invoice_base64');
+
+      if (photoError) {
+        console.error("❌ Erreur upload facture:", photoError);
+        setUpdateError(`Erreur photo: ${photoError.message}. Vérifiez que la colonne 'store_invoice_base64' existe.`);
+        setIsUpdating(false);
+        return;
+      }
+
+      console.log("✅ Facture uploadée!", photoData?.[0]?.id);
+
+      // Mettre à jour l'état local et passer à l'étape 3
+      setOrder((prev: any) => ({ ...prev, store_invoice_base64: invoiceImage }));
+      setCurrentStep(3);
+      setIsUpdating(false);
     }
+    // ÉTAPE 3 : PROGRESSION -> LIVRÉE (delivered) + QR SCAN
+    else if (currentStep === 3) {
+      setIsScannerOpen(true);
+      setIsUpdating(false);
+    }
+    // ÉTAPE 4 : Terminée
     else {
+      setIsUpdating(false);
       navigate('/');
     }
   };
@@ -253,10 +329,15 @@ const ActiveMission: React.FC = () => {
           { facingMode: facingMode },
           { fps: 10, qrbox: { width: 250, height: 250 } },
           async (decodedText) => {
-            const cleanText = decodedText.trim().toUpperCase();
-            const expectedMessage = `CONFIRM-ORDER-ID-${order.id}`;
+            const cleanText = decodedText.trim();
+            const orderId = String(order.id).trim();
 
-            if (cleanText === expectedMessage) {
+            // Le QR code doit contenir le numéro de commande (ex: "42" ou "CONFIRM-ORDER-ID-42")
+            const isMatch = cleanText === orderId
+              || cleanText.toUpperCase() === `CONFIRM-ORDER-ID-${orderId}`
+              || cleanText.toUpperCase() === orderId.toUpperCase();
+
+            if (isMatch) {
               if (scannerRef.current && scannerRef.current.isScanning) {
                 await scannerRef.current.stop();
                 scannerRef.current = null;
@@ -272,6 +353,11 @@ const ActiveMission: React.FC = () => {
                     await supabase.from('drivers').update({ delivery_count: newCount }).eq('id', driverId);
                   }
                 }
+              }
+            } else {
+              // Afficher un message d'erreur si le QR ne correspond pas
+              if (isMounted) {
+                setUpdateError(`QR invalide: "${cleanText}" ≠ "${orderId}"`);
               }
             }
           },
@@ -306,7 +392,26 @@ const ActiveMission: React.FC = () => {
     }
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-white font-black bg-[#0F172A] uppercase tracking-widest">Sécurisation...</div>;
+  if (loading) return (
+    <div className="min-h-screen bg-[#0F172A] pt-6 px-4 space-y-6">
+      {/* Skeleton Header */}
+      <div className="flex justify-between items-start mb-6 px-2">
+        <div className="space-y-2">
+          <div className="h-6 w-40 bg-slate-800 rounded-xl animate-pulse"></div>
+          <div className="h-3 w-24 bg-slate-800/60 rounded animate-pulse"></div>
+        </div>
+        <div className="h-8 w-28 bg-slate-800 rounded-full animate-pulse"></div>
+      </div>
+      {/* Skeleton Stepper */}
+      <div className="flex justify-between px-8">
+        {[1, 2, 3, 4].map(i => <div key={i} className="w-10 h-10 bg-slate-800 rounded-full animate-pulse"></div>)}
+      </div>
+      {/* Skeleton Cards */}
+      <div className="h-40 bg-slate-800/50 rounded-[2.5rem] animate-pulse"></div>
+      <div className="h-48 bg-slate-800/30 rounded-[2.5rem] animate-pulse"></div>
+      <div className="h-16 bg-slate-800/20 rounded-3xl animate-pulse"></div>
+    </div>
+  );
   if (!order) return <div className="min-h-screen flex items-center justify-center text-white font-black bg-[#0F172A]">ORDRE INTROUVABLE</div>;
 
   if (isRejected) {
@@ -335,21 +440,21 @@ const ActiveMission: React.FC = () => {
           </p>
         </div>
         <div className="bg-orange-500/10 text-orange-500 px-4 py-1.5 rounded-full text-[9px] font-black border border-orange-500/20 uppercase tracking-widest text-center min-w-[100px]">
-          {currentStep === 1 ? 'TRAITEMENT' : currentStep === 2 ? 'PROGRESSION' : 'LIVRÉE'}
+          {currentStep === 1 ? 'TRAITEMENT' : currentStep === 2 ? 'EN COURSE' : currentStep === 3 ? 'PROGRESSION' : 'LIVRÉE'}
         </div>
       </header>
 
 
       {/* Progress Stepper */}
       <div className="flex justify-between mb-10 px-8">
-        {[1, 2, 3].map((s) => (
+        {[1, 2, 3, 4].map((s) => (
           <div key={s} className="flex flex-col items-center gap-2 flex-1 relative">
-            {s < 3 && <div className={`absolute top-5 left-1/2 w-full h-[2px] ${currentStep > s ? 'bg-orange-500' : 'bg-slate-800'}`}></div>}
+            {s < 4 && <div className={`absolute top-5 left-1/2 w-full h-[2px] ${currentStep > s ? 'bg-orange-500' : 'bg-slate-800'}`}></div>}
             <div className={`z-10 w-10 h-10 rounded-full flex items-center justify-center font-bold border-2 transition-all ${currentStep >= s ? 'bg-orange-500 border-orange-500 text-white shadow-lg shadow-orange-500/10' : 'bg-slate-900 border-slate-700 text-slate-600'}`}>
               {currentStep > s ? <CheckCircle2 size={18} /> : s}
             </div>
             <span className={`text-[7px] font-black uppercase tracking-tighter ${currentStep >= s ? 'text-white' : 'text-slate-600'}`}>
-              {s === 1 ? 'Traitement' : s === 2 ? 'Progression' : 'Livrée'}
+              {s === 1 ? 'Traitement' : s === 2 ? 'En Course' : s === 3 ? 'Progression' : 'Livrée'}
             </span>
           </div>
         ))}
@@ -678,16 +783,76 @@ const ActiveMission: React.FC = () => {
           </div>
         )}
 
+        {/* PHOTO PREUVE FACTURE (Seulement à l'étape 2 - En Course) */}
+        {currentStep === 2 && (
+          <div className="glass p-6 rounded-[2.5rem] border-white/10 bg-gradient-to-br from-orange-500/5 to-transparent">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-[10px] font-black uppercase text-slate-500 tracking-[0.2em] flex items-center gap-2">
+                <ImageIcon size={14} className="text-orange-500" /> Preuve de Facture
+              </h3>
+              {invoiceImage && <CheckCircle2 size={16} className="text-green-500" />}
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <label className="w-full relative cursor-pointer group">
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleFileChange}
+                  className="hidden"
+                />
+                <div className={`w-full py-4 rounded-2xl border-2 border-dashed flex items-center justify-center gap-2 transition-all ${invoiceImage ? 'border-green-500 bg-green-500/10' : 'border-slate-700 bg-slate-800/50 group-active:border-orange-500'}`}>
+                  {invoiceImage ? (
+                    <span className="text-green-500 font-black text-xs uppercase tracking-widest">Facture Ajoutée</span>
+                  ) : (
+                    <>
+                      <Camera size={20} className="text-slate-400" />
+                      <span className="text-slate-400 font-black text-xs uppercase tracking-widest">Prendre Photo Facture</span>
+                    </>
+                  )}
+                </div>
+              </label>
+
+              {invoiceImage && (
+                <div className="relative w-full h-48 rounded-2xl overflow-hidden border border-white/10">
+                  <img src={invoiceImage} className="w-full h-full object-cover" alt="Facture" />
+                  <button
+                    onClick={() => setInvoiceImage(null)}
+                    className="absolute top-2 right-2 bg-red-500 text-white p-2 rounded-full shadow-lg active:scale-90 transition-transform"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* MAIN ACTION BUTTON */}
-        <button onClick={handleNextStep} className="w-full py-6 rounded-3xl bg-orange-500 text-white font-black text-xl shadow-[0_20px_50px_rgba(249,115,22,0.4)] active:scale-95 transition-all uppercase tracking-tighter flex items-center justify-center gap-3">
-          {currentStep === 1 && "PASSER EN PROGRESSION"}
-          {currentStep === 2 && (
+        <button
+          onClick={handleNextStep}
+          disabled={isUpdating}
+          className={`w-full py-6 rounded-3xl text-white font-black text-xl shadow-[0_20px_50px_rgba(249,115,22,0.4)] active:scale-95 transition-all uppercase tracking-tighter flex items-center justify-center gap-3 ${isUpdating ? 'bg-orange-500/60 cursor-wait' : 'bg-orange-500'}`}
+        >
+          {isUpdating ? (
             <>
-              <QrCode size={24} />
-              SCANNER POUR LIVRER
+              <div className="w-6 h-6 border-3 border-white/30 border-t-white rounded-full animate-spin"></div>
+              MISE À JOUR...
+            </>
+          ) : (
+            <>
+              {currentStep === 1 && "PASSER EN COURSE"}
+              {currentStep === 2 && "PASSER EN PROGRESSION"}
+              {currentStep === 3 && (
+                <>
+                  <QrCode size={24} />
+                  SCANNER POUR LIVRER
+                </>
+              )}
+              {currentStep === 4 && "MISSION TERMINÉE"}
             </>
           )}
-          {currentStep === 3 && "MISSION TERMINÉE"}
         </button>
 
         {/* SIGNALER UN PROBLÈME */}

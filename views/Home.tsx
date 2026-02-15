@@ -101,6 +101,21 @@ const Home: React.FC = () => {
 
     try {
       if (status) {
+        // --- DEMANDE DE PERMISSIONS ---
+        try {
+          // Permission Localisation
+          const locPerm = await Geolocation.requestPermissions();
+          console.log("Localisation Status:", locPerm.location);
+
+          // Permission Caméra (Média)
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+          stream.getTracks().forEach(t => t.stop());
+          console.log("Caméra Status: OK");
+        } catch (perr) {
+          console.warn("Permissions non accordées:", perr);
+          setErrorStatus("GPS et Caméra sont indispensables pour travailler.");
+        }
+
         // GO ONLINE: Créer une session de connexion
         const { data: sessionData } = await supabase
           .from('driver_online_sessions')
@@ -147,7 +162,7 @@ const Home: React.FC = () => {
     const fetchAllMissions = async () => {
       const { data, error } = await supabase
         .from('orders')
-        .select('*')
+        .select('id, status, store_name, delivery_fee, items, assigned_driver_id, is_archived, customer_name, phone')
         .eq('is_archived', false)
         .or(`assigned_driver_id.eq.${driverInfo.id},assigned_driver_id.eq.${driverInfo.name},assigned_driver_id.eq.${driverInfo.phone},assigned_driver_id.ilike.${driverInfo.name}`);
 
@@ -160,25 +175,19 @@ const Home: React.FC = () => {
         const myMissions = data.filter(o => {
           const status = String(o.status || "").toLowerCase();
 
-          // 1. Statuts terminaux (à ne jamais voir sur le Radar)
-          const terminalStatuses = [
-            'delivered', 'completed', 'livrée', 'terminée',
-            'refused', 'refusée', 'refusé', 'refus', 'rejected', 'refuse',
-            'indisponible', 'indispo', 'indisponibe', 'cancelled', 'annulée', 'annulé', 'fermé'
-          ];
-          if (terminalStatuses.includes(status)) return false;
+          // 1. FILTRAGE STRICT : SEULS CES STATUTS SONT VISIBLES DANS LE RADAR
+          const visibleStatuses = [
+            // Pour l'affichage "Inaccessible" (Bloqué)
+            'waiting', 'en attente', 'pending',
+            'verification', 'vérification',
 
-          // 2. Statuts "En cours / Déjà acceptés ou commencés" 
-          // Selon le user : Si le livreur a déjà accepté (Traitement) ou commencé (Progression), 
-          // il ne doit pas les voir sur CETTE page (Radar).
-          // Ces missions seront visibles dans l'onglet "MISSIONS".
-          const inProgressStatuses = [
-            'delivering', 'progression', 'picked_up',
-            'treatment', 'at_store', 'accepted'
+            // Pour l'affichage "Accessible" (Traitement)
+            'treatment', 'at_store', 'accepted', 'traitement',
+            'assigned',
+            'delivering', 'progression', 'en course'
           ];
-          if (inProgressStatuses.includes(status)) return false;
 
-          return true;
+          return visibleStatuses.includes(status);
         });
 
         // Enrichir chaque mission avec les données multi-magasins
@@ -231,6 +240,61 @@ const Home: React.FC = () => {
     };
   }, [isOnline, driverInfo?.id]);
 
+  // 5. SON ET VIBRATION POUR NOUVELLES MISSIONS
+  // Base64 d'un son de notification (Ding)
+  const NOTIFICATION_SOUND = "data:audio/mp3;base64,//uQRAAAAWMSLwUIYAAsYkXgoQwAEaYLWfkWgAI0wWs/ItAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAAG1ineAAA0gAAAB5IAGEp6Q3Zexu0qIFJ8hXzW9tJ+5X3/y//8/7/9/9/9//9//9////9//9//9//9///9////9//9//9//9/4iAAA";
+
+  const lastMissionIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (activeMissions.length === 0) {
+      lastMissionIds.current.clear();
+      return;
+    }
+
+    // Identifier les nouvelles missions
+    let hasNew = false;
+    const currentIds = new Set(activeMissions.map(m => m.id));
+
+    // Si on a plus de missions qu'avant ou des IDs différents
+    for (const id of currentIds) {
+      if (!lastMissionIds.current.has(id)) {
+        hasNew = true;
+        break;
+      }
+    }
+
+    // Si c'est le tout premier chargement (lastMissionIds vide), on ne sonne peut-être pas pour éviter le spam,
+    // SAUF si le user veut vraiment savoir ce qui est là. 
+    // Généralement on évite au mount initial.
+    // MAIS, si le livreur lance l'app, il veut savoir s'il a des trucs.
+    // On va dire : si lastMissionIds était vide mais qu'on vient de charger, on sonne.
+    // Ou alors on sonne seulement si c'est un AJOUT.
+
+    // Logique choisie : on sonne à chaque fois qu'une NOUVELLE mission apparaît.
+    // Pour éviter le spam au refresh, on pourrait vérifier si le composant vient de mounter.
+    // On va utiliser un ref 'isMounted' pour le premier run.
+
+    if (hasNew) {
+      // Jouer le son
+      try {
+        const audio = new Audio(NOTIFICATION_SOUND);
+        audio.play().catch(e => console.warn("Audio play blocked", e));
+
+        // Vibration (si supporté)
+        if (navigator.vibrate) {
+          navigator.vibrate([500, 200, 500]); // Vibre-Pause-Vibre
+        }
+      } catch (err) {
+        console.error("Erreur notification", err);
+      }
+    }
+
+    // Mettre à jour la ref
+    lastMissionIds.current = currentIds;
+
+  }, [activeMissions]);
+
   const handleAcceptMission = async (orderId: string) => {
     setErrorStatus(null);
 
@@ -242,10 +306,13 @@ const Home: React.FC = () => {
       .maybeSingle();
 
     if (currentOrder) {
-      const s = String(currentOrder.status).toLowerCase();
-      if (s === 'verification' || s === 'vérification') {
-        setErrorStatus("ACCÈS REFUSÉ : La commande est encore en cours de vérification par l'administration.");
-        return;
+      if (currentOrder) {
+        const s = String(currentOrder.status).toLowerCase();
+        // Bloquer l'accès si en vérification ou en attente
+        if (['verification', 'vérification', 'waiting', 'en attente', 'pending'].includes(s)) {
+          setErrorStatus("ACCÈS REFUSÉ : La commande est en attente ou en vérification.");
+          return;
+        }
       }
     }
 
@@ -276,7 +343,7 @@ const Home: React.FC = () => {
   const getStatusLabel = (status: string) => {
     const s = String(status).toLowerCase();
     if (s === 'at_store' || s === 'traitement' || s === 'accepted' || s === 'assigned') return 'TRAITEMENT';
-    if (s === 'delivering' || s === 'progression' || s === 'picked_up') return 'PROGRESSION';
+    if (s === 'delivering' || s === 'progression' || s === 'en course') return 'EN LIVRAISON';
     return s.toUpperCase();
   };
 
@@ -284,7 +351,7 @@ const Home: React.FC = () => {
     <div className="min-h-screen pb-32 pt-8 px-4 flex flex-col items-center bg-[#0F172A]">
       <header className="w-full flex justify-between items-center mb-10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-orange-500 rounded-xl flex items-center justify-center font-black shadow-lg">V</div>
+          <img src="/LOGO.png" className="w-10 h-10 object-contain" alt="Logo" />
           <div>
             <h1 className="text-xl font-black text-white leading-none tracking-tighter italic font-serif">VEETAA</h1>
             <p className="text-orange-500 text-[9px] font-black uppercase tracking-[0.2em]">Dispatcher</p>
@@ -344,6 +411,11 @@ const Home: React.FC = () => {
                   key={mission.id}
                   onClick={() => {
                     const s = String(mission.status).toLowerCase();
+                    if (['verification', 'vérification', 'waiting', 'en attente', 'pending'].includes(s)) {
+                      setErrorStatus("La commande est en attente ou en vérification.");
+                      return;
+                    }
+
                     if (['assigned', 'pending', 'en attente', 'waiting'].includes(s)) {
                       handleAcceptMission(mission.id);
                     } else {

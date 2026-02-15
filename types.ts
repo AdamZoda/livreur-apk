@@ -1,8 +1,7 @@
 
 export enum OrderStatus {
   ASSIGNED = 'assigned',
-  AT_STORE = 'treatment', // Changé de 'assigned' vers 'treatment' pour l'acceptation
-  PICKED_UP = 'picked_up',
+  AT_STORE = 'treatment',
   DELIVERING = 'delivering',
   COMPLETED = 'delivered',
   CANCELLED = 'cancelled'
@@ -71,4 +70,5 @@ export interface Order {
   // NOUVEAUX CHAMPS POUR MULTI-MAGASINS
   items?: CartItem[];                    // Items parsés de la commande
   multiStoreData?: MultiStoreDetection;  // Données multi-magasins calculées
+  store_invoice_base64?: string;         // Photo de la facture magasin
 }
